@@ -39,3 +39,6 @@ tracing = "0.1.40"
 jsonrpsee-http-client = "0.20.1"
 jsonrpsee-core = "0.20.1"
 http = "1.0.0"
+
+[dev-dependencies]
+tracing-test = "0.2"
