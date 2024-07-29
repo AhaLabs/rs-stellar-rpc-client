@@ -28,7 +28,6 @@ use termcolor::{Color, ColorChoice, StandardStream, WriteColor};
 use termcolor_output::colored;
 use tokio::time::sleep;
 
-pub mod log;
 mod txn;
 
 pub use txn::Assembled;
@@ -43,6 +42,11 @@ pub type LogEvents = fn(
 ) -> ();
 
 pub type LogResources = fn(resources: &SorobanResources) -> ();
+
+pub struct AssembledOutcome {
+    pub assembled: Option<Assembled>,
+    pub sim_res: SimulateTransactionResponse,
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -823,20 +827,20 @@ impl Client {
     pub async fn simulate_and_assemble_transaction(
         &self,
         tx: &Transaction,
-    ) -> Result<Assembled, Error> {
+    ) -> Result<AssembledOutcome, Error> {
         let sim_res = self
             .simulate_transaction_envelope(&TransactionEnvelope::Tx(TransactionV1Envelope {
                 tx: tx.clone(),
                 signatures: VecM::default(),
             }))
             .await?;
-        match sim_res.error {
-            None => Ok(Assembled::new(tx, sim_res)?),
-            Some(e) => {
-                log::diagnostic_events(&sim_res.events, tracing::Level::ERROR);
-                Err(Error::TransactionSimulationFailed(e))
-            }
-        }
+
+        let assembled = match &sim_res.error {
+            None => Some(Assembled::new(tx, sim_res.clone())?),
+            Some(_) => None,
+        };
+
+        Ok(AssembledOutcome { assembled, sim_res })
     }
 
     ///
@@ -1149,11 +1153,9 @@ pub(crate) fn parse_cursor(c: &str) -> Result<(u64, i32), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::log;
     use std::env;
     use std::fs;
     use std::path::PathBuf;
-    use tracing_test::traced_test;
 
     #[test]
     fn simulation_transaction_response_parsing() {
@@ -1399,21 +1401,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[traced_test]
-    #[test]
-    fn test_diagnostic_events_logging() {
-        let events = vec![
-            "AAAAAAAAAAAAAAAAAAAAAgAAAAAAAAADAAAADwAAAAdmbl9jYWxsAAAAAA0AAAAgfKvD/pIJPlRnGd3RKaBZSHfoq/nJbJSYxkVTScSbhuYAAAAPAAAABGRlY3IAAAAB".to_string(),
-            "AAAAAAAAAAAAAAABfKvD/pIJPlRnGd3RKaBZSHfoq/nJbJSYxkVTScSbhuYAAAACAAAAAAAAAAEAAAAPAAAAA2xvZwAAAAAQAAAAAQAAAAIAAAAOAAAACWNvdW50OiB7fQAAAAAAAAMAAAAA".to_string(),
-            "AAAAAAAAAAAAAAABfKvD/pIJPlRnGd3RKaBZSHfoq/nJbJSYxkVTScSbhuYAAAACAAAAAAAAAAIAAAAPAAAABWVycm9yAAAAAAAAAgAAAAEAAAAGAAAAEAAAAAEAAAACAAAADgAAACdWTSBjYWxsIHRyYXBwZWQ6IFVucmVhY2hhYmxlQ29kZVJlYWNoZWQAAAAADwAAAARkZWNy".to_string(),
-        ];
-
-        log::diagnostic_events(&events, tracing::Level::ERROR);
-
-        assert!(logs_contain("0: \"AAAAAAAAAAAAAAAAAAAAAgAAAAAAAAADAAAADwAAAAdmbl9jYWxsAAAAAA0AAAAgfKvD/pIJPlRnGd3RKaBZSHfoq/nJbJSYxkVTScSbhuYAAAAPAAAABGRlY3IAAAAB\" {\"in_successful_contract_call\":false,\"event\":{\"ext\":\"v0\",\"contract_id\":null,\"type_\":\"diagnostic\",\"body\":{\"v0\":{\"topics\":[{\"symbol\":\"fn_call\"},{\"bytes\":\"7cabc3fe92093e546719ddd129a0594877e8abf9c96c9498c6455349c49b86e6\"},{\"symbol\":\"decr\"}],\"data\":\"void\"}}}}"));
-        assert!(logs_contain("1: \"AAAAAAAAAAAAAAABfKvD/pIJPlRnGd3RKaBZSHfoq/nJbJSYxkVTScSbhuYAAAACAAAAAAAAAAEAAAAPAAAAA2xvZwAAAAAQAAAAAQAAAAIAAAAOAAAACWNvdW50OiB7fQAAAAAAAAMAAAAA\" {\"in_successful_contract_call\":false,\"event\":{\"ext\":\"v0\",\"contract_id\":\"7cabc3fe92093e546719ddd129a0594877e8abf9c96c9498c6455349c49b86e6\",\"type_\":\"diagnostic\",\"body\":{\"v0\":{\"topics\":[{\"symbol\":\"log\"}],\"data\":{\"vec\":[{\"string\":\"count: {}\"},{\"u32\":0}]}}}}}"));
-        assert!(logs_contain("2: \"AAAAAAAAAAAAAAABfKvD/pIJPlRnGd3RKaBZSHfoq/nJbJSYxkVTScSbhuYAAAACAAAAAAAAAAIAAAAPAAAABWVycm9yAAAAAAAAAgAAAAEAAAAGAAAAEAAAAAEAAAACAAAADgAAACdWTSBjYWxsIHRyYXBwZWQ6IFVucmVhY2hhYmxlQ29kZVJlYWNoZWQAAAAADwAAAARkZWNy\" {\"in_successful_contract_call\":false,\"event\":{\"ext\":\"v0\",\"contract_id\":\"7cabc3fe92093e546719ddd129a0594877e8abf9c96c9498c6455349c49b86e6\",\"type_\":\"diagnostic\",\"body\":{\"v0\":{\"topics\":[{\"symbol\":\"error\"},{\"error\":{\"wasm_vm\":\"invalid_action\"}}],\"data\":{\"vec\":[{\"string\":\"VM call trapped: UnreachableCodeReached\"},{\"symbol\":\"decr\"}]}}}}}"));
     }
 }
